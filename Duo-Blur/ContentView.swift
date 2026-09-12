@@ -2,16 +2,13 @@ import SwiftUI
 
 // MARK: - Blur configuration
 
-/// One stop of the progressive blur: a base radius (scaled by fold), how far
+/// One stop of the progressive blur: a base radius (scaled by fold) and how far
 /// across the swinging half — from the outer screen edge toward the hinge — it
-/// reaches (0…1), and a stable color for the visualizer.
+/// reaches (0…1).
 struct BlurStep: Identifiable {
     let id = UUID()
     var radius: CGFloat
     var reach: CGFloat
-    var hue: Double
-
-    var color: Color { Color(hue: hue, saturation: 0.85, brightness: 1) }
 }
 
 // MARK: - Content
@@ -30,19 +27,28 @@ struct ContentView: View {
     @State private var isDragging = false
     @State private var dragFold = 0.0
 
-    // Tuning visualizer.
+    // Depth effect: subject cutouts lifted from the wallpapers by Vision
+    // (nil until segmentation finishes, or when no subject is found).
+    @State private var leftCutout: UIImage?
+    @State private var rightCutout: UIImage?
+
+    // Swing-angle tuner.
     @State private var showTuner = false
-    @State private var manualFold = 0.5
-    @State private var steps: [BlurStep] = [
-        BlurStep(radius: 16,  reach: 1.00, hue: 0.62),   // reaches the hinge
-        BlurStep(radius: 34,  reach: 1.00, hue: 0.02),
-        BlurStep(radius: 66,  reach: 0.98, hue: 0.12),
-        BlurStep(radius: 120, reach: 0.94, hue: 0.33),
-        BlurStep(radius: 190, reach: 0.88, hue: 0.50),
-        BlurStep(radius: 260, reach: 0.80, hue: 0.80)    // heaviest, stays strong nearly to the middle
+
+    private let steps: [BlurStep] = [
+        BlurStep(radius: 16,  reach: 1.00),   // reaches the hinge
+        BlurStep(radius: 34,  reach: 1.00),
+        BlurStep(radius: 66,  reach: 0.98),
+        BlurStep(radius: 120, reach: 0.94),
+        BlurStep(radius: 190, reach: 0.88),
+        BlurStep(radius: 260, reach: 0.80)    // heaviest, stays strong nearly to the middle
     ]
 
-    @State private var maxRotation: Double = 35
+    // Rendered swing at full (90°) physical tilt. Deliberately less than 90:
+    // the screen's perspective projection assumes an eye dead-center in front,
+    // so a true 90° panel reads as over-rotated from any real viewing angle
+    // and breaks the flat-on-the-table illusion.
+    @State private var maxRotation: Double = 70
 
     /// Sorted lightest→heaviest so the heavier stops layer on top near the edge.
     private var sortedSteps: [BlurStep] { steps.sorted { $0.radius < $1.radius } }
@@ -52,7 +58,7 @@ struct ContentView: View {
             ZStack {
                 TimelineView(.animation) { timeline in
                     let isLandscape = geo.size.width >= geo.size.height
-                    let fold = showTuner ? manualFold : currentFold(isLandscape: isLandscape, at: timeline.date)
+                    let fold = currentFold(isLandscape: isLandscape, at: timeline.date)
                     let panel = CGSize(width: geo.size.width / 2, height: geo.size.height)
                     let ordered = sortedSteps
 
@@ -72,7 +78,11 @@ struct ContentView: View {
                         // Lock screen: flat, full-display UI on top, always sharp.
                         LockScreen()
 
-                        if showTuner { BlurStopOverlay(steps: ordered) }
+                        // Depth effect: the lifted subject drawn above the lock
+                        // screen so it overlaps the clock, with the same layout
+                        // and hinge transform as the sharp panels so it stays
+                        // registered with the wallpaper.
+                        cutoutScene(fold: fold, panel: panel, size: geo.size)
                     }
                     .frame(width: geo.size.width, height: geo.size.height)
                     .clipped()
@@ -89,6 +99,10 @@ struct ContentView: View {
         .persistentSystemOverlays(.hidden)
         .onAppear { motion.start() }
         .onDisappear { motion.stop() }
+        .task {
+            leftCutout = await SubjectLift.cutout(fromImageNamed: "wall-left")
+            rightCutout = await SubjectLift.cutout(fromImageNamed: "wall-right")
+        }
     }
 
     // MARK: Sharp scene
@@ -105,6 +119,20 @@ struct ContentView: View {
         }
         .frame(width: size.width, height: size.height)
         .clipped()
+    }
+
+    /// The lifted-subject layer: same two-panel layout as `scene`, but drawing
+    /// the transparent-background cutouts and no edge fade.
+    private func cutoutScene(fold: Double, panel: CGSize, size: CGSize) -> some View {
+        HStack(spacing: 0) {
+            CutoutPanel(image: leftCutout, outerLeading: true,
+                        magnitude: max(-fold, 0), size: panel, maxRotation: maxRotation)
+            CutoutPanel(image: rightCutout, outerLeading: false,
+                        magnitude: max(fold, 0), size: panel, maxRotation: maxRotation)
+        }
+        .frame(width: size.width, height: size.height)
+        .clipped()
+        .allowsHitTesting(false)
     }
 
     /// Screen-space mask for a blur stop. White (blur) sits at the swinging
@@ -130,32 +158,11 @@ struct ContentView: View {
         VStack(spacing: 0) {
             Spacer()
             if showTuner {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("Blur stops").font(.system(size: 13, weight: .bold))
-                        Spacer()
-                        Button {
-                            steps.append(BlurStep(radius: 30, reach: 0.5, hue: Double.random(in: 0...1)))
-                        } label: {
-                            Label("Add", systemImage: "plus.circle.fill").font(.system(size: 13, weight: .semibold))
-                        }
-                    }
-                    ForEach($steps) { $step in stepRow($step) }
-                    Divider().overlay(Color.white.opacity(0.2))
-                    HStack(spacing: 10) {
-                        Text("Fold").font(.system(size: 12, weight: .semibold)).frame(width: 48, alignment: .leading)
-                        Slider(value: $manualFold, in: -1...1)
-                        Text(String(format: "%+.2f  %d°", manualFold, Int(manualFold * maxRotation)))
-                            .font(.system(size: 12, design: .monospaced)).frame(width: 78, alignment: .trailing)
-                    }
-                    HStack(spacing: 10) {
-                        Text("Swing").font(.system(size: 12, weight: .semibold)).frame(width: 48, alignment: .leading)
-                        Slider(value: $maxRotation, in: 0...90)
-                        Text("\(Int(maxRotation))° max")
-                            .font(.system(size: 12, design: .monospaced)).frame(width: 78, alignment: .trailing)
-                    }
-                    Text("Blur is a top layer over the screen, on the swinging half. r = base radius, % = reach toward the hinge.")
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                HStack(spacing: 10) {
+                    Text("Swing").font(.system(size: 12, weight: .semibold)).frame(width: 48, alignment: .leading)
+                    Slider(value: $maxRotation, in: 0...90)
+                    Text("\(Int(maxRotation))° max")
+                        .font(.system(size: 12, design: .monospaced)).frame(width: 78, alignment: .trailing)
                 }
                 .padding(14)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
@@ -165,34 +172,12 @@ struct ContentView: View {
                 Spacer()
                 Button { showTuner.toggle() } label: {
                     Image(systemName: "slider.horizontal.3")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(12)
-                        .background(.ultraThinMaterial, in: Circle())
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.35))
+                        .padding(12)   // keeps a comfortable tap target
                 }
                 .padding(16)
             }
-        }
-    }
-
-    private func stepRow(_ step: Binding<BlurStep>) -> some View {
-        HStack(spacing: 8) {
-            RoundedRectangle(cornerRadius: 3).fill(step.wrappedValue.color).frame(width: 16, height: 10)
-            Text("r").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
-            Slider(value: step.radius, in: 2...350)
-            Text("\(Int(step.wrappedValue.radius))")
-                .font(.system(size: 11, design: .monospaced)).frame(width: 34, alignment: .trailing)
-            Text("reach").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
-            Slider(value: step.reach, in: 0...1)
-            Text("\(Int(step.wrappedValue.reach * 100))%")
-                .font(.system(size: 11, design: .monospaced)).frame(width: 38, alignment: .trailing)
-            Button {
-                steps.removeAll { $0.id == step.wrappedValue.id }
-            } label: {
-                Image(systemName: "minus.circle.fill").font(.system(size: 15))
-                    .foregroundStyle(steps.count > 1 ? .red : .gray)
-            }
-            .disabled(steps.count <= 1)
         }
     }
 
@@ -258,40 +243,37 @@ private struct SharpPanel: View {
     }
 }
 
-// MARK: - Blur-stop visualizer (screen space)
+// MARK: - Cutout panel (depth effect)
 
-/// Vertical guide lines showing where each blur stop reaches, measured from each
-/// screen edge toward the center hinge, plus edge and hinge markers.
-private struct BlurStopOverlay: View {
-    let steps: [BlurStep]
+/// The lifted-subject counterpart of `SharpPanel`: identical layout and hinge
+/// transform, but drawing the subject cutout with no edge fade, so the subject
+/// lands pixel-perfect over its wallpaper twin.
+private struct CutoutPanel: View {
+    let image: UIImage?
+    let outerLeading: Bool
+    let magnitude: Double
+    let size: CGSize
+    let maxRotation: Double
 
     var body: some View {
-        GeometryReader { g in
-            let w = g.size.width, h = g.size.height
-            ZStack(alignment: .topLeading) {
-                edge(x: 0, lineWidth: 3, color: .white, h: h)
-                edge(x: w, lineWidth: 3, color: .white, h: h)
-                edge(x: w / 2, lineWidth: 1.5, color: .white.opacity(0.4), h: h)
+        let anchor: UnitPoint = outerLeading ? UnitPoint(x: 1, y: 0.5) : UnitPoint(x: 0, y: 0.5)
+        let angle = (outerLeading ? -1.0 : 1.0) * magnitude * maxRotation
 
-                ForEach(Array(steps.enumerated()), id: \.element.id) { i, step in
-                    let dx = step.reach * 0.5 * w
-                    edge(x: w - dx, lineWidth: 2, color: step.color, h: h, dashed: true)
-                    edge(x: dx, lineWidth: 2, color: step.color, h: h, dashed: true)
-                    Text("r\(Int(step.radius))")
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundStyle(step.color)
-                        .padding(.horizontal, 4).padding(.vertical, 1)
-                        .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 4))
-                        .position(x: w - dx, y: 26 + CGFloat(i) * 22)
-                }
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: size.width, height: size.height,
+                           alignment: outerLeading ? .trailing : .leading)
+                    .clipped()
+            } else {
+                Color.clear.frame(width: size.width, height: size.height)
             }
         }
-        .allowsHitTesting(false)
-    }
-
-    private func edge(x: CGFloat, lineWidth: CGFloat, color: Color, h: CGFloat, dashed: Bool = false) -> some View {
-        Path { p in p.move(to: CGPoint(x: x, y: 0)); p.addLine(to: CGPoint(x: x, y: h)) }
-            .stroke(color, style: StrokeStyle(lineWidth: lineWidth, dash: dashed ? [7, 5] : []))
+        .rotation3DEffect(.degrees(angle), axis: (x: 0, y: 1, z: 0),
+                          anchor: anchor, perspective: 0.5)
+        .accessibilityHidden(true)
     }
 }
 

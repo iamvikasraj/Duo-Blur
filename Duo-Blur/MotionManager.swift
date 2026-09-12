@@ -26,9 +26,11 @@ final class MotionManager {
 
     private let manager = CMMotionManager()
 
-    /// How much tilt reaches full deflection. 0.5g ≈ a 30° tilt maps to 1.0,
-    /// so a comfortable hand-tilt covers the whole range.
-    private let sensitivity = 0.5
+    /// Full deflection (1.0) corresponds to a 90° physical tilt. Combined with
+    /// a 90° max panel rotation, the rendered angle tracks the device's real
+    /// tilt 1:1 — like lifting one half of a notebook while the other half
+    /// stays flat on the table.
+    private let maxTiltAngle = Double.pi / 2
 
     /// Low-pass smoothing (0 = frozen, 1 = no smoothing). Keeps the scene from
     /// jittering with the raw sensor noise.
@@ -44,8 +46,11 @@ final class MotionManager {
         manager.startDeviceMotionUpdates(to: .main) { [weak self] motion, _ in
             guard let self, let gravity = motion?.gravity else { return }
 
-            let tx = (gravity.x / self.sensitivity).clamped()
-            let ty = (gravity.y / self.sensitivity).clamped()
+            // asin recovers the true tilt angle from the gravity component
+            // (gravity.x = sin(tilt)), so the mapping stays angle-accurate
+            // instead of compressing near 90°.
+            let tx = asin(gravity.x.clamped()) / self.maxTiltAngle
+            let ty = asin(gravity.y.clamped()) / self.maxTiltAngle
 
             self.gx += (tx - self.gx) * self.smoothing
             self.gy += (ty - self.gy) * self.smoothing
