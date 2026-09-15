@@ -44,11 +44,15 @@ struct iPadDuoView: View {
 
     // Live tuners (tap the slider glyph, bottom-right).
     @State private var showTuner = false
-    @State private var maxBlur: Double = 55        // max variable-blur radius (pt) at full fold
-    @State private var darkStrength: Double = 0.60 // max scrim opacity at the outer edge
-    @State private var sweepAt: Double = 0.5       // fold fraction at which the frost front reaches centre (~45°)
-    @State private var gridSlide: Double = 24      // how far the icon grid nudges right at full fold, pt
-    @State private var leftFoldAngle: Double = 35  // left panel's half-fold about the crease, degrees
+    @State private var manualFold = 0.0            // the single Fold slider (0…1); overrides drag/gyro when > 0
+
+    // Baked-in tuning (blur/dark shared with iPhone-Duo).
+    private let maxBlur: Double = 55        // max variable-blur radius (pt) at full fold
+    private let darkStrength: Double = 0.60 // max scrim opacity at the outer edge
+    private let sweepAt: Double = 0.5       // fold fraction at which the frost front reaches centre (~45°)
+    private let gridSlide: Double = 24      // how far the icon grid nudges right at full fold, pt
+    private let leftFoldAngle: Double = 35  // left panel's half-fold about the crease, degrees
+    private let gyroGain: Double = 1.6      // gyro sensitivity + direction (signed): tilt → fold
 
     var body: some View {
         GeometryReader { geo in
@@ -64,35 +68,37 @@ struct iPadDuoView: View {
                         .scaleEffect(scale)
                         .frame(width: geo.size.width, height: geo.size.height)
                 }
+                .allowsHitTesting(false)   // visuals don't capture touches
+
+                // Fold-drag layer — a stable clear layer that sits BELOW the
+                // tuner, so the tuner's sliders receive their own touches instead
+                // of the drag folding the screen.
+                Color.clear
+                    .contentShape(Rectangle())
+                    .gesture(dragGesture(in: geo.size))
+
                 tuner
             }
-            .contentShape(Rectangle())
-            .gesture(dragGesture(in: geo.size))
         }
         .background(.black)
         .ignoresSafeArea()
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
-        .onAppear { motion.start() }
-        .onDisappear { motion.stop() }
+        .onAppear { motion.start(); UIApplication.shared.isIdleTimerDisabled = true }
+        .onDisappear { motion.stop(); UIApplication.shared.isIdleTimerDisabled = false }
     }
 
     // MARK: Fold assembly
 
-    /// The home screen stays flat and intact; the fold is told entirely on the
-    /// SCREEN SURFACE. A screen-space variable blur + dark scrim frosts the left
-    /// of the display, and its coverage SWEEPS from the left edge inward — the
-    /// frost front leads the fold so the receding edge never reads as empty. By
-    /// `sweepAt` (~45°) the front reaches the centre crease, then it just
-    /// deepens. `fold` is 0 (open, fully sharp) … 1 (fully folded).
+    /// The home screen stays flat and intact; the fold is told on the SCREEN
+    /// SURFACE. The screen splits at the centre crease: the LEFT panel half-folds
+    /// away while the RIGHT stays flat. A screen-space variable blur + dark scrim
+    /// (clipped to the left half) frosts the folding panel and sweeps toward the
+    /// crease; the right-hand group (widgets + grid) nudges right. `fold` is 0
+    /// (open, sharp) … 1 (fully folded).
     private func foldedCanvas(fold: Double) -> some View {
         let f = min(max(fold, 0), 1)
-        // Blur/scrim attack ahead of the geometry: front-loaded so a slight fold
-        // already frosts the edge hard.
         let bite = pow(f, 0.4)
-        // Sharp/frost boundary as a fraction of the full width: 0 (left edge) …
-        // 0.44 (just LEFT of the centre crease, so it resolves to sharp before
-        // the first right-hand column). Hits that point at `sweepAt`.
         let front = CGFloat(min(f / max(sweepAt, 0.05), 1) * 0.44)
         let radius = CGFloat(maxBlur * bite)
         let dark = CGFloat(darkStrength * bite)
@@ -107,8 +113,7 @@ struct iPadDuoView: View {
                 .overlay(Color.black.opacity(0.45))
 
             // Split at the centre crease: the LEFT panel half-folds away about
-            // the crease (the simulated folded second half); the RIGHT panel
-            // stays flat, facing the viewer.
+            // the crease; the RIGHT panel stays flat, facing the viewer.
             HStack(spacing: 0) {
                 leaf(.left, gridShiftX: slide)
                     .rotation3DEffect(.degrees(-angle), axis: (x: 0, y: 1, z: 0),
@@ -117,13 +122,15 @@ struct iPadDuoView: View {
             }
             .frame(width: design.width, height: design.height)
 
-            // Screen-surface frost over the folded (left) panel, sweeping in —
-            // the blur VIEW is clipped to the left half, so the right (flat)
-            // panel is never under the effect layer at all. `front` is a
-            // full-width fraction, so it doubles to the half-width view's space.
-            VariableBlur(maxBlurRadius: radius, front: min(front * 2, 1))
-                .frame(width: design.width / 2, height: design.height)
-                .allowsHitTesting(false)
+            // Screen-surface frost over the folded (left) panel — clipped to the
+            // left half so the right (flat) panel is never under the effect
+            // layer. Omitted at rest. `front` is a full-width fraction, so it
+            // doubles to the half-width view's space.
+            if radius > 0.5 {
+                VariableBlur(maxBlurRadius: radius, front: min(front * 2, 1))
+                    .frame(width: design.width / 2, height: design.height)
+                    .allowsHitTesting(false)
+            }
 
             // Dark scrim over the frosted band, heaviest at the outer (left) edge.
             LinearGradient(
@@ -156,8 +163,9 @@ struct iPadDuoView: View {
     /// which springs back to 0 (the default, unfolded state) once released — so
     /// the resting state is always the clean home screen. Only folds one way.
     private func currentFold(at date: Date) -> Double {
-        if motion.isUsingGyro { return min(max(motion.gx, 0), 1) }
-        if isDragging { return dragFold }
+        if isDragging { return dragFold }          // an active drag always wins (and lets the Simulator drive it)
+        if manualFold > 0.001 { return manualFold }// the single Fold slider (set it to 0 to hand control to the gyro)
+        if motion.isUsingGyro { return gyroFold() }
         guard let releaseAt else { return 0 }
         let t = date.timeIntervalSince(releaseAt)
         if t >= 1.6 { return 0 }
@@ -167,6 +175,22 @@ struct iPadDuoView: View {
         let decay = exp(-zeta * omega * t)
         let value = releaseFold * decay * (cos(wd * t) + (zeta * omega / wd) * sin(wd * t))
         return min(max(value, 0), 1)
+    }
+
+    /// Gyro-driven fold for the LANDSCAPE iPad. Screen-space roll maps to the
+    /// device's LONG axis (`gy`), not `gx` (that's the portrait iPhone's roll).
+    /// The two landscape orientations are mirror images, so `landscapeLeft` flips
+    /// the sign; `gyroGain` (signed) sets overall sensitivity and direction. A
+    /// small deadzone keeps a level iPad at the clean, unfolded default.
+    private func gyroFold() -> Double {
+        let roll = (interfaceOrientation == .landscapeLeft) ? -motion.gy : motion.gy
+        return min(max(roll * gyroGain - 0.03, 0), 1)
+    }
+
+    private var interfaceOrientation: UIInterfaceOrientation {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?.effectiveGeometry.interfaceOrientation ?? .landscapeRight
     }
 
     /// Simulator fold control: drag horizontally to fold; on release it springs
@@ -191,15 +215,15 @@ struct iPadDuoView: View {
         VStack(spacing: 0) {
             Spacer()
             if showTuner {
-                VStack(spacing: 10) {
-                    tunerRow("Blur",  value: $maxBlur,      range: 0...90) { "\(Int($0)) pt" }
-                    tunerRow("Dark",  value: $darkStrength, range: 0...1)  { "\(Int($0 * 100))%" }
-                    tunerRow("Reach", value: $sweepAt,      range: 0.25...0.9) { String(format: "%.2f", $0) }
-                    tunerRow("Slide", value: $gridSlide,     range: 0...120) { "\(Int($0)) pt" }
-                    tunerRow("Fold",  value: $leftFoldAngle, range: 0...70) { "\(Int($0))°" }
+                HStack(spacing: 12) {
+                    Text("Fold").font(.system(size: 14, weight: .semibold)).frame(width: 44, alignment: .leading)
+                    Slider(value: $manualFold, in: 0...1)
+                    Text("\(Int(manualFold * 100))%")
+                        .font(.system(size: 14, design: .monospaced)).frame(width: 54, alignment: .trailing)
                 }
-                .padding(14)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+                .foregroundStyle(.white)
+                .padding(18)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
                 .padding(.horizontal, 16)
             }
             HStack {
@@ -212,16 +236,6 @@ struct iPadDuoView: View {
                 }
                 .padding(16)
             }
-        }
-    }
-
-    private func tunerRow(_ label: String, value: Binding<Double>, range: ClosedRange<Double>,
-                          _ fmt: @escaping (Double) -> String) -> some View {
-        HStack(spacing: 10) {
-            Text(label).font(.system(size: 12, weight: .semibold)).frame(width: 48, alignment: .leading)
-            Slider(value: value, in: range)
-            Text(fmt(value.wrappedValue))
-                .font(.system(size: 12, design: .monospaced)).frame(width: 70, alignment: .trailing)
         }
     }
 
@@ -359,27 +373,30 @@ private struct Wallpaper: View {
 /// (whatever sits behind it in the ZStack). The blur is full `maxBlurRadius` at
 /// the LEFT edge and tapers to sharp by `front` (0 … 1 across the width), so
 /// moving `front` sweeps the frost horizontally across the screen.
-private struct VariableBlur: UIViewRepresentable {
+struct VariableBlur: UIViewRepresentable {
     var maxBlurRadius: CGFloat
     var front: CGFloat
+    var fromRight: Bool = false   // mirror the ramp so the frost is heaviest on the RIGHT edge
 
     func makeUIView(context: Context) -> VariableBlurUIView { VariableBlurUIView() }
 
     func updateUIView(_ view: VariableBlurUIView, context: Context) {
-        view.update(maxBlurRadius: maxBlurRadius, mask: Self.mask(front: front))
+        view.update(maxBlurRadius: maxBlurRadius, mask: Self.mask(front: front, fromRight: fromRight))
     }
 
     /// A white ramp whose ALPHA (what `variableBlur` reads) is opaque = full blur
-    /// at the left edge and fades to transparent = sharp by `front`. Two rows,
-    /// stretched over the layer → a purely horizontal sweep.
-    static func mask(front: CGFloat, width: Int = 512) -> CGImage? {
+    /// at the free edge and fades to transparent = sharp by `front`. Two rows,
+    /// stretched over the layer → a purely horizontal sweep. `fromRight` mirrors
+    /// it so the heavy edge is the right instead of the left.
+    static func mask(front: CGFloat, fromRight: Bool = false, width: Int = 512) -> CGImage? {
         let f = Double(min(max(front, 0.004), 1))
         let height = 2
         var bytes = [UInt8](repeating: 0, count: width * height * 4)
         for x in 0..<width {
             let t = Double(x) / Double(width - 1)
-            // Heavy at the left, easing to 0 at the front; powered for a soft tail.
-            let a = t < f ? pow(1 - t / f, 1.6) : 0
+            let u = fromRight ? (1 - t) : t   // distance from the heavy (free) edge
+            // Heavy at the free edge, easing to 0 at the front; powered for a soft tail.
+            let a = u < f ? pow(1 - u / f, 1.6) : 0
             let v = UInt8(max(0, min(1, a)) * 255)   // premultiplied white → RGB == A
             for y in 0..<height {
                 let i = (y * width + x) * 4
