@@ -8,7 +8,7 @@ import SwiftUI
 /// blur): a left→right Gaussian ramp from sharp (start blur 0) to full (end
 /// blur) that stays put regardless of the tilt — it does not follow the fold.
 /// Figma reference: X 0% → 104%, Y 50%, start blur 0, end blur 24.
-struct HomeScreenPanoView: View {
+struct iPhoneDuoView: View {
     @State private var motion = MotionManager()
 
     // Simulator fallback state.
@@ -219,6 +219,10 @@ struct ProgressiveBlur<Content: View>: View {
     /// end, `tintStrength` opacity at the blurry end. 0 disables it.
     var tint: Color = .black
     var tintStrength: CGFloat = 0
+    /// Where the scrim begins ramping up from clear (0 = sharp end, 1 = blurry
+    /// end). Lower spreads the dark toward the sharp end. Default keeps the
+    /// sharp third clean.
+    var tintStart: CGFloat = 0.3
     /// How many blurred copies build the ramp. More = smoother, costlier.
     var layers: Int = 6
     @ViewBuilder var content: Content
@@ -237,7 +241,7 @@ struct ProgressiveBlur<Content: View>: View {
                 LinearGradient(
                     stops: [
                         .init(color: tint.opacity(0), location: 0),
-                        .init(color: tint.opacity(0), location: 0.3),
+                        .init(color: tint.opacity(0), location: tintStart),
                         .init(color: tint.opacity(tintStrength), location: 1)
                     ],
                     startPoint: axisStart, endPoint: axisEnd
@@ -262,5 +266,5 @@ struct ProgressiveBlur<Content: View>: View {
 }
 
 #Preview {
-    HomeScreenPanoView()
+    iPhoneDuoView()
 }

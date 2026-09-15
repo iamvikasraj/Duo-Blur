@@ -6,9 +6,9 @@ import SwiftUI
             // iPad renders the home-screen interface; iPhone runs the
             // single-screen pano fold directly.
             if UIDevice.current.userInterfaceIdiom == .pad {
-                IPadHomeView()
+                iPadDuoView()
             } else {
-                HomeScreenPanoView()
+                iPhoneDuoView()
             }
         }
     }
