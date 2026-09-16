@@ -1,11 +1,11 @@
 import SwiftUI
 
-/// iPhone "Duo" — the SAME fold as iPad-Duo, on the phone's wallpaper. The
-/// screen splits at the centre crease: the LEFT half folds away about the crease
-/// while the RIGHT stays flat, and a screen-surface variable blur (iOS's own
-/// `CAFilter("variableBlur")`, clipped to the left half) frosts the folding side
-/// and sweeps toward the crease, with a dark scrim. Exact same blur radius, dark
-/// and fold angle as the iPad.
+/// iPhone "Duo" — the same variable-blur fold as iPad-Duo, on the phone's
+/// wallpaper, but as ONE page (no centre split). The whole screen is hinged on
+/// the RIGHT edge like a door, so the LEFT edge swings away as it folds, and a
+/// screen-surface variable blur (iOS's own `CAFilter("variableBlur")`) frosts the
+/// folding (LEFT) side and sweeps in from the left edge, with a dark scrim. Same
+/// blur radius, dark and fold angle as the iPad.
 ///
 /// A single Fold slider drives it on the Simulator (0 … 100 %); the gyro drives
 /// it on device. The drag springs back to the flat default on release.
@@ -20,13 +20,14 @@ struct iPhoneDuoView: View {
     @State private var showTuner = false
     @State private var manualFold = 0.0   // the single Fold slider (0…1)
 
-    /// The wallpaper mockup.
-    private let panoImage = "wall"
+    /// The wallpaper — the same asset the iPad-Duo home screen uses, so both
+    /// devices fold the same image.
+    private let panoImage = "iPhone-Duo-wallpaper-Apple"
 
     // Baked-in tuning.
     private let maxBlur: Double = 55        // max variable-blur radius (pt) at the free edge, full fold
     private let darkStrength: Double = 0.60 // max scrim opacity at the free edge
-    private let leftFoldAngle: Double = 35  // door swing at full fold, degrees
+    private let leftFoldAngle: Double = 80  // door swing at full fold, degrees (near-edge-on, ~78–80°)
 
     var body: some View {
         GeometryReader { geo in
@@ -39,12 +40,18 @@ struct iPhoneDuoView: View {
                 }
                 .allowsHitTesting(false)   // visuals don't capture touches
 
+                #if targetEnvironment(simulator)
+                // Simulator-only manual controls. On a real device the gyro drives
+                // the fold, so the drag layer and the Fold tuner are compiled out
+                // entirely — no chrome, and no stray touch overriding the gyro.
+
                 // Fold-drag layer below the tuner, so the slider gets its own touches.
                 Color.clear
                     .contentShape(Rectangle())
                     .gesture(dragGesture(in: geo.size))
 
                 tuner
+                #endif
             }
         }
         .background(.black)
@@ -57,9 +64,9 @@ struct iPhoneDuoView: View {
 
     // MARK: Fold assembly (same model as iPad-Duo)
 
-    /// The WHOLE screen is a page hinged like a door on the LEFT edge, so the
-    /// RIGHT edge swings away as it folds (no centre split). A screen-surface
-    /// variable blur frosts the RIGHT (free) edge and sweeps EDGE TO EDGE, with a
+    /// The WHOLE screen is a page hinged like a door on the RIGHT edge, so the
+    /// LEFT edge swings away as it folds (no centre split). A screen-surface
+    /// variable blur frosts the LEFT (free) edge and sweeps EDGE TO EDGE, with a
     /// dark scrim. `fold` is 0 (open, sharp) … 1 (fully folded).
     private func foldStack(fold: Double, size: CGSize) -> some View {
         let f = min(max(fold, 0), 1)
@@ -74,27 +81,27 @@ struct iPhoneDuoView: View {
                 .blur(radius: 60, opaque: true)
                 .overlay(Color.black.opacity(0.45))
 
-            // The whole screen as a door, hinged on the LEFT edge so the RIGHT
+            // The whole screen as a door, hinged on the RIGHT edge so the LEFT
             // edge swings back (away from the viewer).
             canvas(size: size)
-                .rotation3DEffect(.degrees(angle), axis: (x: 0, y: 1, z: 0),
-                                  anchor: .leading, perspective: 0.6)
+                .rotation3DEffect(.degrees(-angle), axis: (x: 0, y: 1, z: 0),
+                                  anchor: .trailing, perspective: 0.6)
 
-            // Screen-surface frost, EDGE TO EDGE — heaviest at the free (RIGHT)
-            // edge, sweeping left as the fold deepens. Omitted at rest.
+            // Screen-surface frost, EDGE TO EDGE — heaviest at the free (LEFT)
+            // edge, sweeping right as the fold deepens. Omitted at rest.
             if radius > 0.5 {
-                VariableBlur(maxBlurRadius: radius, front: front, fromRight: true)
+                VariableBlur(maxBlurRadius: radius, front: front, fromRight: false)
                     .allowsHitTesting(false)
             }
 
-            // Dark scrim along the free (RIGHT) edge, matching the sweep.
+            // Dark scrim along the free (LEFT) edge, matching the sweep.
             LinearGradient(
                 stops: [
                     .init(color: .black.opacity(dark), location: 0),
                     .init(color: .black.opacity(dark * 0.55), location: front * 0.55),
                     .init(color: .clear, location: max(front, 0.001))
                 ],
-                startPoint: .trailing, endPoint: .leading
+                startPoint: .leading, endPoint: .trailing
             )
             .allowsHitTesting(false)
         }
