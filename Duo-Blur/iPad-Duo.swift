@@ -1,21 +1,20 @@
 import SwiftUI
 import UIKit
 
-/// iPad "Duo" — the home screen as the inner display of a book-fold device.
-/// The home screen stays FLAT and intact; the fold is told on the screen
-/// SURFACE. A screen-space variable blur (iOS's own `CAFilter("variableBlur")`)
-/// plus a dark scrim frosts the left of the display, and its coverage SWEEPS
-/// from the left edge inward as the device folds — the frost front leads the
-/// fold so the receding edge never reads as empty, reaching the centre crease
-/// at ~45° and then just deepening. On the Simulator (no gyro) drag
-/// horizontally to fold; the slider glyph tunes blur / dark / reach.
+/// iPad "Duo" — a home screen reimagined as the inner display of a book-fold
+/// device. The home screen stays FLAT and intact; the "fold" is faked on the
+/// screen SURFACE: a screen-space variable blur (iOS's own private
+/// `CAFilter("variableBlur")`) plus a dark scrim frosts the left half and SWEEPS
+/// from the outer edge toward the centre crease as the device tilts, so the
+/// receding edge never reads as empty. It reaches the crease around ~45° and
+/// then deepens, held at `maxFold`.
 ///
-/// The home itself is a faithful rebuild of the Figma reference (node 61:10):
-/// a color-blocked skeleton — solid-color app tiles with labels (no glyphs),
-/// image widget cards, a Liquid Glass dock, and the dune wallpaper.
+/// The fold is gyro-driven (see `MotionManager`). With no device motion — e.g.
+/// in the Simulator — it rests flat at the clean, unfolded home screen.
 ///
-/// The wallpaper here is an ORIGINAL gradient approximation, not the copyrighted
-/// dune photo — drop a licensed asset into `Wallpaper` to match exactly.
+/// The layout rebuilds a Figma reference: image widget cards, an app-icon grid,
+/// a Liquid Glass sidebar, and a wallpaper. The icon and wallpaper artwork are
+/// placeholders standing in for the real thing — swap in your own assets.
 struct iPadDuoView: View {
     private let design = CGSize(width: 1194, height: 834)
 
@@ -195,7 +194,7 @@ struct iPadDuoView: View {
                 }
             }
             .frame(width: design.width, height: design.height, alignment: .topLeading)
-            .offset(x: gridShiftX)   // springs with the fold (the fold itself springs back on release)
+            .offset(x: gridShiftX)   // the right-hand group nudges right as the fold deepens
 
             // Dock + chrome ------------------------------------------------
             statusGlyph
@@ -228,44 +227,49 @@ struct iPadDuoView: View {
             .position(x: cx, y: cy)
     }
 
-    // MARK: App tile
+    // MARK: App icons
+
+    /// A catalog image sized to `size` and masked to the iOS squircle, with the
+    /// standard tile shadow — shared by the app grid and the sidebar dock.
+    private func maskedIcon(_ asset: String, size: CGFloat) -> some View {
+        Image(asset)
+            .resizable()
+            .interpolation(.high)
+            .frame(width: size, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: size * 0.2237, style: .continuous))
+            .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+    }
 
     private func appTile(_ label: String, hex: String, x: CGFloat, y: CGFloat) -> some View {
-        // Real icon art lives in the namespaced "Medium-icons" catalog group,
-        // exported with transparent rounded corners (see `mediumIcon` for the
-        // label → asset mapping). Every tile is still clipped to the iOS squircle
-        // for uniform corners, and the shadow follows that shape. Falls back to
-        // the sampled tile colour for any icon without art yet (currently News).
-        let shape = RoundedRectangle(cornerRadius: icon * 0.2237, style: .continuous)
+        // Icon art from the namespaced "Medium-icons" group (see `mediumIcon` for
+        // the label → asset map). A label without art yet (currently News) falls
+        // back to the sampled tile colour.
+        let center = CGPoint(x: x + icon / 2, y: y + icon / 2)
         let asset = mediumIcon[label].map { "Medium-icons/\($0)" }
         return Group {
-            Group {
-                if let asset, UIImage(named: asset) != nil {
-                    Image(asset).resizable().interpolation(.high)
-                } else {
-                    shape.fill(Color(hex: hex))
-                }
+            if let asset, UIImage(named: asset) != nil {
+                maskedIcon(asset, size: icon).position(center)
+            } else {
+                RoundedRectangle(cornerRadius: icon * 0.2237, style: .continuous)
+                    .fill(Color(hex: hex))
+                    .frame(width: icon, height: icon)
+                    .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+                    .position(center)
             }
-            .frame(width: icon, height: icon)
-            .clipShape(shape)
-            .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
-            .position(x: x + icon / 2, y: y + icon / 2)
-            caption(label, cx: x + icon / 2, cy: y + icon + 15)
+            caption(label, cx: center.x, cy: y + icon + 15)
         }
     }
 
     // MARK: Dock
 
     private var dock: some View {
-        let tile: CGFloat = 60
-        let hexes = ["39DB61", "EFEDEE", "64DE76", "FC0058"]
-        // Content INSIDE the glass (idiomatic Liquid Glass), positioned by centre.
+        // Sidebar app icons (Phone, Safari, Messages, Music) from the namespaced
+        // Medium-icons/Sidebar group, each 57×57 and masked to the iOS squircle.
+        // Content sits INSIDE the Liquid Glass, positioned by centre.
+        let icons = ["call", "safari", "message", "music"]
         return VStack(spacing: 19) {
-            ForEach(0..<hexes.count, id: \.self) { i in
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color(hex: hexes[i]))
-                    .frame(width: tile, height: tile)
-                    .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+            ForEach(icons, id: \.self) { name in
+                maskedIcon("Medium-icons/\(name)", size: 57)
             }
         }
         .padding(14)
