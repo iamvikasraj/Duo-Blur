@@ -8,7 +8,7 @@
 [![SwiftUI](https://img.shields.io/badge/SwiftUI-F05138?logo=swift&logoColor=white)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-2e7d32.svg)](LICENSE)
 
-<img src="docs/duo-home.png" width="760" alt="Duo-Blur home screen">
+<img src="docs/duo-fold.gif" width="760" alt="Duo-Blur — the home screen folding as the iPad tilts">
 
 </div>
 
