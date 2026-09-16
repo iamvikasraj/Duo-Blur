@@ -32,6 +32,16 @@ struct iPadDuoView: View {
         [("Health", "FC0068"),   ("Wallet", "292A30"),   ("Siri", "91898A"),      ("Settings", "A29DA1")]
     ]
 
+    /// Grid label → its art in the namespaced "Medium-icons" catalog group
+    /// (the exported asset names are cased inconsistently). Labels with no entry
+    /// — currently News — fall back to the sampled tile colour.
+    private let mediumIcon: [String: String] = [
+        "FaceTime": "Facetime", "Calendar": "Calendar", "App Store": "App Store", "Camera": "Camera",
+        "Mail": "Mail",         "Notes": "Notes",       "Clock": "Clock",         "Maps": "maps",
+        "Tv": "tv",             "Games": "games",       "Photos": "photos",
+        "Health": "health",     "Wallet": "wallet",     "Siri": "siri",           "Settings": "settings"
+    ]
+
     // MARK: Fold state
 
     @State private var motion = MotionManager()
@@ -47,12 +57,13 @@ struct iPadDuoView: View {
     @State private var manualFold = 0.0            // the single Fold slider (0…1); overrides drag/gyro when > 0
 
     // Baked-in tuning (blur/dark shared with iPhone-Duo).
-    private let maxBlur: Double = 55        // max variable-blur radius (pt) at full fold
+    private let maxBlur: Double = 90        // max variable-blur radius (pt) at full fold
     private let darkStrength: Double = 0.60 // max scrim opacity at the outer edge
     private let sweepAt: Double = 0.5       // fold fraction at which the frost front reaches centre (~45°)
     private let gridSlide: Double = 24      // how far the icon grid nudges right at full fold, pt
-    private let leftFoldAngle: Double = 35  // left panel's half-fold about the crease, degrees
-    private let gyroGain: Double = 1.6      // gyro sensitivity + direction (signed): tilt → fold
+    private let leftFoldAngle: Double = 80  // left panel's fold about the crease at full fold, degrees (near-edge-on, ~78–80°)
+    private let maxFold: Double = 0.85      // fold caps here and holds — blur/angle/dark freeze at the max-open look
+    private let gyroGain: Double = -1.6     // gyro sensitivity + direction (signed): tilt → fold. Negative folds on the opposite tilt.
 
     var body: some View {
         GeometryReader { geo in
@@ -70,6 +81,11 @@ struct iPadDuoView: View {
                 }
                 .allowsHitTesting(false)   // visuals don't capture touches
 
+                #if targetEnvironment(simulator)
+                // Simulator-only manual controls. On a real device the gyro drives
+                // the fold, so the drag layer and the Fold tuner are compiled out
+                // entirely — no chrome, and no stray touch overriding the gyro.
+
                 // Fold-drag layer — a stable clear layer that sits BELOW the
                 // tuner, so the tuner's sliders receive their own touches instead
                 // of the drag folding the screen.
@@ -78,6 +94,7 @@ struct iPadDuoView: View {
                     .gesture(dragGesture(in: geo.size))
 
                 tuner
+                #endif
             }
         }
         .background(.black)
@@ -97,9 +114,9 @@ struct iPadDuoView: View {
     /// crease; the right-hand group (widgets + grid) nudges right. `fold` is 0
     /// (open, sharp) … 1 (fully folded).
     private func foldedCanvas(fold: Double) -> some View {
-        let f = min(max(fold, 0), 1)
+        let f = min(max(fold, 0), maxFold)   // cap the fold so it maxes at the 85% look and holds
         let bite = pow(f, 0.4)
-        let front = CGFloat(min(f / max(sweepAt, 0.05), 1) * 0.44)
+        let front = CGFloat(min(f / max(sweepAt, 0.05), 1) * 0.5)   // 0.5 → frost sweeps the full half-width (edge → crease)
         let radius = CGFloat(maxBlur * bite)
         let dark = CGFloat(darkStrength * bite)
         let slide = CGFloat(gridSlide) * CGFloat(f)   // the icon grid nudges right with the fold
@@ -298,12 +315,25 @@ struct iPadDuoView: View {
     // MARK: App tile
 
     private func appTile(_ label: String, hex: String, x: CGFloat, y: CGFloat) -> some View {
-        Group {
-            RoundedRectangle(cornerRadius: icon * 0.2237, style: .continuous)
-                .fill(Color(hex: hex))
-                .frame(width: icon, height: icon)
-                .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
-                .position(x: x + icon / 2, y: y + icon / 2)
+        // Real icon art lives in the namespaced "Medium-icons" catalog group,
+        // exported with transparent rounded corners (see `mediumIcon` for the
+        // label → asset mapping). Every tile is still clipped to the iOS squircle
+        // for uniform corners, and the shadow follows that shape. Falls back to
+        // the sampled tile colour for any icon without art yet (currently News).
+        let shape = RoundedRectangle(cornerRadius: icon * 0.2237, style: .continuous)
+        let asset = mediumIcon[label].map { "Medium-icons/\($0)" }
+        return Group {
+            Group {
+                if let asset, UIImage(named: asset) != nil {
+                    Image(asset).resizable().interpolation(.high)
+                } else {
+                    shape.fill(Color(hex: hex))
+                }
+            }
+            .frame(width: icon, height: icon)
+            .clipShape(shape)
+            .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+            .position(x: x + icon / 2, y: y + icon / 2)
             caption(label, cx: x + icon / 2, cy: y + icon + 15)
         }
     }
@@ -331,9 +361,15 @@ struct iPadDuoView: View {
 
     private var statusGlyph: some View {
         VStack(spacing: 2) {
-            Text("9:41")
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(.white)
+            // Live clock — refreshes each second and follows the device's
+            // 12/24-hour setting, with AM/PM omitted to match the status-bar
+            // style the "9:41" mockup used.
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                Text(context.date, format: .dateTime.hour(.defaultDigits(amPM: .omitted)).minute(.twoDigits))
+                    .font(.system(size: 20, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+            }
             Image("wifi-glyph")
                 .resizable()
                 .aspectRatio(contentMode: .fit)
@@ -358,7 +394,7 @@ struct iPadDuoView: View {
 
 private struct Wallpaper: View {
     var body: some View {
-        Image("iPhone-Duo-wallpaper-Apple")
+        Image("iPhone-Duo-wallpaper-Apple-dark")
             .resizable()
             .aspectRatio(contentMode: .fill)
             .clipped()
@@ -480,6 +516,13 @@ extension Color {
     }
 }
 
-#Preview {
+// Adaptive: follows the device picked in the canvas — iPad shows the iPad
+// design, iPhone shows the iPhone one (same switch the app uses at launch).
+#Preview("Adaptive · pick device") {
+    RootView()
+}
+
+// This view in isolation, regardless of the selected device.
+#Preview("iPad-Duo") {
     iPadDuoView()
 }
