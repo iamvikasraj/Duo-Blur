@@ -46,17 +46,7 @@ struct iPadDuoView: View {
 
     @State private var motion = MotionManager()
 
-    // Simulator fallback (no gyro): drag horizontally to fold; springs back to 0.
-    @State private var isDragging = false
-    @State private var dragFold = 0.0
-    @State private var releaseAt: Date?     // when the drag was released (drives spring-back)
-    @State private var releaseFold = 0.0    // the fold value at release
-
-    // Live tuners (tap the slider glyph, bottom-right).
-    @State private var showTuner = false
-    @State private var manualFold = 0.0            // the single Fold slider (0…1); overrides drag/gyro when > 0
-
-    // Baked-in tuning (blur/dark shared with iPhone-Duo).
+    // Baked-in tuning.
     private let maxBlur: Double = 90        // max variable-blur radius (pt) at full fold
     private let darkStrength: Double = 0.60 // max scrim opacity at the outer edge
     private let sweepAt: Double = 0.5       // fold fraction at which the frost front reaches centre (~45°)
@@ -72,29 +62,14 @@ struct iPadDuoView: View {
             // beside the frosted edge. Cover trims a few px of bleed instead.
             let scale = max(geo.size.width / design.width, geo.size.height / design.height)
             ZStack {
-                TimelineView(.animation) { timeline in
-                    let fold = currentFold(at: timeline.date)
+                TimelineView(.animation) { _ in
+                    let fold = currentFold()
                     foldedCanvas(fold: fold)
                         .frame(width: design.width, height: design.height)
                         .scaleEffect(scale)
                         .frame(width: geo.size.width, height: geo.size.height)
                 }
                 .allowsHitTesting(false)   // visuals don't capture touches
-
-                #if targetEnvironment(simulator)
-                // Simulator-only manual controls. On a real device the gyro drives
-                // the fold, so the drag layer and the Fold tuner are compiled out
-                // entirely — no chrome, and no stray touch overriding the gyro.
-
-                // Fold-drag layer — a stable clear layer that sits BELOW the
-                // tuner, so the tuner's sliders receive their own touches instead
-                // of the drag folding the screen.
-                Color.clear
-                    .contentShape(Rectangle())
-                    .gesture(dragGesture(in: geo.size))
-
-                tuner
-                #endif
             }
         }
         .background(.black)
@@ -176,29 +151,16 @@ struct iPadDuoView: View {
 
     // MARK: Fold source
 
-    /// Fold amount 0…1. Gyro roll when a device is present; otherwise the drag,
-    /// which springs back to 0 (the default, unfolded state) once released — so
-    /// the resting state is always the clean home screen. Only folds one way.
-    private func currentFold(at date: Date) -> Double {
-        if isDragging { return dragFold }          // an active drag always wins (and lets the Simulator drive it)
-        if manualFold > 0.001 { return manualFold }// the single Fold slider (set it to 0 to hand control to the gyro)
-        if motion.isUsingGyro { return gyroFold() }
-        guard let releaseAt else { return 0 }
-        let t = date.timeIntervalSince(releaseAt)
-        if t >= 1.6 { return 0 }
-        // Underdamped spring easing the released fold back to 0.
-        let omega = 9.0, zeta = 0.7
-        let wd = omega * (1 - zeta * zeta).squareRoot()
-        let decay = exp(-zeta * omega * t)
-        let value = releaseFold * decay * (cos(wd * t) + (zeta * omega / wd) * sin(wd * t))
-        return min(max(value, 0), 1)
+    /// Fold amount 0…1, driven by the gyro. Rests at 0 — the clean, unfolded home
+    /// screen — when no device motion is available (e.g. in the Simulator).
+    private func currentFold() -> Double {
+        motion.isUsingGyro ? gyroFold() : 0
     }
 
     /// Gyro-driven fold for the LANDSCAPE iPad. Screen-space roll maps to the
-    /// device's LONG axis (`gy`), not `gx` (that's the portrait iPhone's roll).
-    /// The two landscape orientations are mirror images, so `landscapeLeft` flips
-    /// the sign; `gyroGain` (signed) sets overall sensitivity and direction. A
-    /// small deadzone keeps a level iPad at the clean, unfolded default.
+    /// device's LONG axis (`gy`). The two landscape orientations are mirror
+    /// images, so `landscapeLeft` flips the sign; `gyroGain` (signed) sets overall
+    /// sensitivity and direction. A small deadzone keeps a level iPad unfolded.
     private func gyroFold() -> Double {
         let roll = (interfaceOrientation == .landscapeLeft) ? -motion.gy : motion.gy
         return min(max(roll * gyroGain - 0.03, 0), 1)
@@ -208,52 +170,6 @@ struct iPadDuoView: View {
         UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .first?.effectiveGeometry.interfaceOrientation ?? .landscapeRight
-    }
-
-    /// Simulator fold control: drag horizontally to fold; on release it springs
-    /// back to the default unfolded state (a stand-in for the gyro settling flat).
-    private func dragGesture(in size: CGSize) -> some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { value in
-                isDragging = true
-                releaseAt = nil
-                dragFold = min(max(value.translation.width / (size.width * 0.4), 0), 1)
-            }
-            .onEnded { _ in
-                isDragging = false
-                releaseFold = dragFold
-                releaseAt = Date()
-            }
-    }
-
-    // MARK: Tuner overlay
-
-    private var tuner: some View {
-        VStack(spacing: 0) {
-            Spacer()
-            if showTuner {
-                HStack(spacing: 12) {
-                    Text("Fold").font(.system(size: 14, weight: .semibold)).frame(width: 44, alignment: .leading)
-                    Slider(value: $manualFold, in: 0...1)
-                    Text("\(Int(manualFold * 100))%")
-                        .font(.system(size: 14, design: .monospaced)).frame(width: 54, alignment: .trailing)
-                }
-                .foregroundStyle(.white)
-                .padding(18)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
-                .padding(.horizontal, 16)
-            }
-            HStack {
-                Spacer()
-                Button { showTuner.toggle() } label: {
-                    Image(systemName: "slider.horizontal.3")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.35))
-                        .padding(12)
-                }
-                .padding(16)
-            }
-        }
     }
 
     /// The home screen. `gridShiftX` nudges the RIGHT-hand group — the Weather
@@ -516,13 +432,6 @@ extension Color {
     }
 }
 
-// Adaptive: follows the device picked in the canvas — iPad shows the iPad
-// design, iPhone shows the iPhone one (same switch the app uses at launch).
-#Preview("Adaptive · pick device") {
-    RootView()
-}
-
-// This view in isolation, regardless of the selected device.
-#Preview("iPad-Duo") {
+#Preview {
     iPadDuoView()
 }

@@ -10,8 +10,7 @@ import CoreMotion
 /// of the gimbal-lock jumps you get from Euler angles — ideal for parallax.
 ///
 /// The iOS Simulator has no gyroscope, so `isUsingGyro` reports whether real
-/// motion data is available. When it isn't, the view falls back to a drag
-/// gesture plus a gentle idle sway.
+/// motion data is available. When it isn't, the fold simply rests flat.
 @Observable
 final class MotionManager {
 
