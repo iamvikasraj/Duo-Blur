@@ -1,67 +1,69 @@
+<div align="center">
+
 # Duo‑Blur
 
-A SwiftUI study: an iPad home screen reimagined as the **inner display of a book‑fold device**. The screen never physically folds — the fold is faked entirely on the screen *surface* with a progressive blur that sweeps in from the edge as you tilt the iPad, so the "folding" half frosts and recedes without ever leaving an empty gap.
+**An iPad home screen that folds like the inside of a book.**
 
-> Inspired by the foldable‑iPhone concept videos going around. This is a rendering & interaction study, not a real folding UI.
+[![iPadOS 26+](https://img.shields.io/badge/iPadOS-26+-000000?logo=apple&logoColor=white)](#requirements)
+[![SwiftUI](https://img.shields.io/badge/SwiftUI-F05138?logo=swift&logoColor=white)](#)
+[![License: MIT](https://img.shields.io/badge/License-MIT-2e7d32.svg)](LICENSE)
 
-![Duo-Blur home screen](docs/duo-home.png)
-<!-- Swap in your own screenshot/GIF at docs/duo-home.png -->
+<img src="docs/duo-home.png" width="760" alt="Duo-Blur home screen">
 
-## The effect
+</div>
 
-Tilt the iPad and the left half of the home screen appears to fold away: it darkens, frosts into a heavy progressive blur, and leans back on a subtle 3D hinge — while the right half stays flat and crisp. Let it level out and it springs back to a clean, ordinary home screen. It's driven by the gyroscope, so it reacts continuously to how you hold the device.
+There's no folding hardware here. The screen stays flat and whole. Tilt the iPad and one half frosts over, dims, and leans away on a soft hinge, exactly the way a book‑fold display looks as it closes. Level it out and it snaps back to an ordinary home screen. All of it happens on the surface, driven by the gyroscope.
 
-## How it works
+## How the fold works
 
-- **The home screen never moves.** It's a static layout (`iPadDuoView`): widget cards, a 4×4 app‑icon grid, a Liquid Glass sidebar, and a wallpaper.
-- **The "fold" is a screen‑surface effect.** `foldedCanvas` splits the screen at the centre crease. The left half gets a small 3D `rotation3DEffect`, and over it sits a **variable (progressive) blur + a dark scrim**. As the fold deepens, the frost sweeps from the outer edge toward the crease — *leading* the fold, so the receding edge reads as frosted glass rather than a void. The effect reaches the crease around ~45° and then just deepens, capped at `maxFold` (85%) so it holds at the nicest pose.
-- **Motion drives it.** `MotionManager` reads the device's gravity vector via CoreMotion and exposes it as a smoothed, normalized tilt; `gyroFold()` maps the landscape roll to the fold amount. All the feel lives in a handful of named constants at the top of `iPadDuoView`: `maxBlur`, `darkStrength`, `leftFoldAngle`, `maxFold`, `gyroGain`, …
+Three layers sit over a static home screen:
 
-## Design notes — how it came together
+1. A gentle `rotation3DEffect` leans the left half back from the centre crease.
+2. A **progressive blur** frosts that half: heaviest at the outer edge, easing to sharp at the crease.
+3. A dark scrim rides along so the folding side reads as glass catching shadow.
 
-The interesting parts were mostly dead ends before they were features. A few that shaped the result:
+The trick is that the blur *leads* the tilt. As the fold deepens, the frost sweeps inward toward the crease ahead of the geometry, so the receding edge never looks like an empty gap. The feel lives in a few constants at the top of `iPadDuoView`: `maxBlur`, `leftFoldAngle`, `maxFold`, `gyroGain`.
 
-**Fake the fold on the *surface*, don't rotate the screen.** The first instinct — rotate the whole home screen as one plane, or a big physical‑looking hinge — looked wrong immediately. There's no second display to reveal, so any real rotation just exposes an empty void behind it. The move that worked: keep the home screen *flat and whole*, and sell the fold with a **blur that leads the crease**. The folding half is progressively frosted and dimmed so the eye reads "this part is angling away," and there's never a gap to explain.
+## Notes from building it
 
-**The blur is iOS's own — which means a private API.** That specific gradient frost (the one behind the status bar, nav bars and the keyboard) is Core Animation's `CAFilter("variableBlur")`. `VariableBlur` reaches it by attaching the filter to a `UIVisualEffectView`'s backdrop layer. The gotcha that cost an afternoon: **the filter reads the mask's *alpha* channel, not its luminance.** A solid grayscale ramp blurs the entire screen uniformly; what you actually need is a white image whose *alpha* fades from opaque (full blur, at the outer edge) to transparent (sharp, at the crease). It's a private API, so it's App‑Store‑rejectable — great for a concept, not for shipping.
+A few things that were dead ends before they were features:
 
-**Reading the tilt takes some care.** Motion comes from the **gravity vector** rather than raw attitude — its components are already normalized and free of the gimbal‑lock jumps you get from Euler angles. Because the app is landscape‑locked, the roll that folds the screen is the device's **long** axis (`gy`), not the short one. The sign flips between the two landscape orientations, a small deadzone keeps a level iPad perfectly unfolded, and `gyroGain` is *signed* so flipping it mirrors which way you tilt to fold. (The Simulator has no gyroscope, so it just shows the flat screen — the fold is a real‑device thing.)
+**Don't rotate the screen. Fake it on the surface.** The obvious approach, hinging the whole screen like a real page, falls apart instantly: there's no second display behind it, so any real rotation just reveals a void. Keeping the home screen flat and selling the fold with a blur that leads the crease is what made it read as "folding" instead of "tilting a picture."
 
-**Dialing in the feel was all iteration against reference frames.** The shallow first pass (a ~35° hinge, a light frost) didn't read as "folded." Matching the concept videos meant pushing the hinge to a near‑edge‑on **80°**, making the blur much heavier (`maxBlur` 55 → 90) and letting the frost sweep the **full** half‑width instead of stopping short — then **capping the fold at 85%** so it maxes out at the pose that looks best and simply holds there instead of collapsing to a sliver.
+**The blur is Apple's own, which means a private API.** That specific gradient frost is Core Animation's `variableBlur` `CAFilter`. The wrapper (`VariableBlur`) attaches it to a `UIVisualEffectView`'s backdrop. The catch that ate an afternoon: the filter reads the mask's **alpha**, not its brightness. A grey gradient blurs the whole screen evenly; you need a white image whose *alpha* fades from opaque to clear. It's private, so it's App‑Store‑rejectable, fine for a concept, not for shipping.
 
-**The home screen is a Figma rebuild, and the icons have a pipeline.** Layout coordinates were measured off a Figma reference. App icons are exported 2× from Figma into a namespaced asset‑catalog group and each one is masked to the iOS **squircle** (a continuous rounded rectangle at ~0.2237 × side). Another gotcha: the first exports arrived as **opaque squares** — the design's dark frame colour was baked into the corners — so every tile is clipped to the squircle in code, which crops those corners cleanly. A single `maskedIcon(_:size:)` helper does that for both the grid and the sidebar dock.
+**Landscape roll is the long axis.** Motion comes from the gravity vector (stable, no gimbal‑lock jumps). Because the app is landscape‑locked, the roll that folds the screen is the device's long axis (`gy`), the sign flips between the two landscape orientations, and a small deadzone keeps a level iPad perfectly still.
 
-**Trimming it down for sharing.** The build had an on‑screen slider and a drag‑to‑fold gesture for tuning without a device; those were pulled out so the shared code is purely gyro‑driven and uncluttered, the app was made iPad‑only, and the in‑progress iPhone variant was parked on its own branch.
+**The feel is all in the numbers.** The first pass, a shy 35° hinge with a light frost, didn't sell it. Matching the reference meant pushing the hinge near edge‑on to 80°, roughly doubling the blur, sweeping the frost across the full half, and then capping the fold at 85% so it settles on the best‑looking pose instead of collapsing to a sliver.
 
-### The variable blur, in brief
-
-`VariableBlur` is a small, self‑contained `UIViewRepresentable` you can lift into your own projects (it sweeps from either edge via `fromRight`). It's the one piece here that's broadly reusable — just remember the private‑API caveat above.
+**The icons needed clipping.** App icons export from Figma at 2× into a namespaced asset group. The first batch came back as opaque squares with the dark frame baked into the corners, so every tile gets clipped to the iOS squircle in code (`0.2237 × side`). One `maskedIcon` helper handles both the grid and the sidebar.
 
 ## Requirements
 
-- **Xcode 26+**, Swift 5.9+
-- **iOS 26+** target — the sidebar and search button use **Liquid Glass** (`glassEffect`), with a material fallback on older systems.
-- Built and tuned against **iPad Pro 11″ (M5), iOS 27** (the layout is measured for the 1194 × 834 landscape canvas).
-- **A real device to feel the fold.** It's gyro‑driven; the **Simulator has no gyroscope, so it shows the flat home screen.**
+- Xcode 26+, and an **iOS 26+** target (the sidebar and search pill use Liquid Glass, with a material fallback below that).
+- Built for **iPad Pro 11″ (M5), iOS 27**; the layout is measured for the 1194 × 834 landscape canvas.
+- **A real iPad to feel it.** The fold is gyro‑driven, and the Simulator has no gyroscope, so it just shows the flat home screen.
 
-## Running it
+## Run it
 
-1. Open `Duo-Blur.xcodeproj`.
-2. Select the **Duo-Blur** scheme and an **iPad** destination (a physical iPad to see the fold react to tilt).
-3. Run, then tilt the iPad — the left half frosts and folds away.
+```
+open Duo-Blur.xcodeproj
+```
 
-## Project layout
+Pick the **Duo-Blur** scheme and an **iPad** destination (a physical one to see it react), run, and tilt.
 
-| File | What it does |
-|------|--------------|
-| `iPad-Duo.swift` | The whole experience — `iPadDuoView` (layout + fold), `VariableBlur` (the progressive‑blur component), and small `Color(hex:)` / Liquid Glass helpers. |
-| `MotionManager.swift` | CoreMotion wrapper exposing a smoothed, normalized tilt (`gx`, `gy`). |
+## What's where
+
+| File | Role |
+|------|------|
+| `iPad-Duo.swift` | The whole thing: `iPadDuoView` (layout + fold) and `VariableBlur` (the reusable progressive‑blur component). |
+| `MotionManager.swift` | CoreMotion wrapper, exposes a smoothed tilt as `gx` / `gy`. |
 | `MyApp.swift` | App entry point. |
 
-## Assets & trademarks
+## Assets
 
-This is a **concept / fan project and is not affiliated with, endorsed by, or sponsored by Apple Inc.** The bundled app icons, widget mockups, and wallpaper resemble Apple artwork and are included **for demonstration only**. **Apple**, **iPadOS**, the app icons, and all related names and logos are trademarks of Apple Inc. Replace the assets in `Assets.xcassets` with your own before using this beyond experimentation.
+Concept / fan project, **not affiliated with or endorsed by Apple**. The bundled icons, widgets, and wallpaper resemble Apple artwork and are here for demonstration only; Apple and the app marks belong to Apple Inc. Swap in your own art in `Assets.xcassets` before doing anything beyond experimenting.
 
 ## License
 
-The **source code** is released under the [MIT License](LICENSE). The license covers the code only — not the third‑party artwork described above.
+Code is [MIT](LICENSE). The license covers the source, not the third‑party artwork above.
